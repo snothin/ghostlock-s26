@@ -18,32 +18,34 @@ target and is expected to cover the whole family.
 > after repeated debugging this repository took shape.
 
 - **Bug**: futex PI use-after-free race → pselect fd_set seeding → one aligned qword
-  kernel write per round → arbitrary physical read/write.
+  kernel write → arbitrary kernel read/write.
 - **Devices**: Galaxy S26 / S26+ / S26 Ultra, Snapdragon (CN + intl) and Exynos variants.
 - **Result**: usermode helper runs as `uid=0(root) context=u:r:kernel:s0`; persistent
-  root shell via `su_daemon` on an abstract unix socket.
+  root shell via `su_daemon` on `/data/local/tmp/temp_su.sock`.
 - **KDP bypass**: no credential writes — the root stage forges a `work_struct` on
   `system_unbound_wq` whose function is `call_usermodehelper_exec_work`, so the kernel
   executes our daemon with init creds. KDP's EL2 guard on credential pages is never
   triggered.
-- **DEFEX bypass**: the helper bind-mounts the daemon over a dormant system binary
-  before exec; DEFEX's safeplace rule sees a whitelisted path.
+- **DEFEX bypass**: the ksud late-load is bind-mounted over a dormant system
+  binary (`logcat`) before exec; DEFEX's safeplace rule sees a whitelisted path.
 
 ## Attack flow
 
 ```
+tracefs slide oracle → KASLR base
 pselect + futex PI race
-  → one aligned qword write per round
-  → attr carrier (two fake misc fds)
-      controller fd retargets the data pointer
+  → one aligned qword kernel write
+  → attr carrier (controller + data misc nodes)
+      the write links both nodes
+      clearing controller.minor makes the next open land on data
       data fd reads/writes any kernel address
-  → slide oracle (tracefs)
   → UMH root (workqueue injection)
-      system_unbound_wq
+      forged work_struct on system_unbound_wq
       ptmx open/close storm wakes a worker
       kernel execs daemon with init creds
-  → DEFEX bypass (bind-mount)
-  → su_daemon listens on /data/local/tmp/temp_su.sock
+  → KernelSU late-load: ksud bind-mounted over logcat in a private
+    mount namespace (DEFEX safeplace sees a whitelisted path)
+  → su_daemon keeps serving /data/local/tmp/temp_su.sock
 ```
 
 ## Supported firmware
@@ -52,6 +54,8 @@ Parameters are matched by **kernel line** (three lines: `cn`, `intl`, `exynos`),
 by individual build. Unknown OTA builds fall back to the closest known line by model
 and CSC. Completely unknown models are rejected (fail-closed). The embedded build
 list is authoritative in [`exploit/src/params_table.c`](exploit/src/params_table.c).
+A custom kernel line for unlisted firmware can be supplied at runtime
+(`/data/local/tmp/ghostlock-lines.conf`, see [Environment](#environment)).
 See [PORTING.md](PORTING.md) for the parameters needed when porting to a new
 device or firmware.
 
@@ -94,8 +98,30 @@ successful run, `su_daemon` listens on `/data/local/tmp/temp_su.sock`, and any
 local process can connect.
 
 The boot-claim guard (`/data/local/tmp/ghostlock-boot.log`) records the outcome of
-each boot's run; a second full-chain run in the same boot is rejected (it can crash
-the device). Clear the file or set `BOOT_FORCE=1` to override.
+each boot's run; a second full-chain run in the same boot is rejected. Clear the
+file or set `BOOT_FORCE=1` to override.
+
+## Environment
+
+Every option exists as an env var, a config-file key
+(`/data/local/tmp/ghostlock.conf`, one `key=value` per line) and a CLI flag
+(`--key=value`); precedence is defaults < file < env < CLI. Running with
+`--help` prints the full table (names, defaults, ranges, reload flags).
+
+The behavior switches:
+
+| Env var              | Key                | Effect                                                                                                          |
+| -------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `BOOT_FORCE=1`       | `boot.force`       | allow a re-run within the same boot                                                                             |
+| `GHOSTLOCK_NO_KSU=1` | `ksu.skip`         | skip the KernelSU late-load: permissive temporary root + su socket only; reboot restores the device (Knox risk) |
+| `ALLOW_SHELL=1`      | `root.allow_shell` | add the shell uid to the KernelSU allowlist during late-load                                                    |
+| `PARAMS_CUSTOM=1`    | `params.custom`    | use the custom kernel line only (fails closed if unusable)                                                      |
+
+The remaining keys tune the race (`walk.*`, `heap.*`, ...). The exynos line
+injects `KSUD_TREE=exynos` for the paired ksud (driver interface 32601); other
+lines carry no tree override. Custom kernel lines for unlisted firmware go in
+`/data/local/tmp/ghostlock-lines.conf` (`line_id=...` plus one field per line,
+see [PORTING.md](PORTING.md)).
 
 ## Credits
 
