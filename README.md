@@ -7,7 +7,13 @@ per-build compilation.
 
 Most GhostLock porting efforts target a single device or a single firmware.
 This repository is a fresh port that rewrites every mechanism for the S26
-target and is expected to cover the whole family.
+target and is expected to cover the whole family
+
+# Announcement
+
+[https://github.com/diabl0w/DFRoot](https://github.com/diabl0w/DFRoot) by @diabl0w is a simpler and better solution. I recommend to use it.
+
+The exploit in this repository has been merged into [https://github.com/snothin/GhostSam](https://github.com/snothin/GhostSam). GhostSam is more complex; DFRoot is purer and simpler.
 
 ## At a glance
 
